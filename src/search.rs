@@ -9,6 +9,7 @@ pub struct SearchResult {
     pub score: i32,
     pub nodes: u64,
     pub depth: u32,
+    pub pv: Vec<Move>,
 }
 
 pub fn search(
@@ -28,7 +29,7 @@ pub fn search(
         }
 
         // ply 0 is the root
-        let (mov, score) = get_best_move(
+        let (mov, score, pv) = get_best_move(
             board,
             current_depth,
             &start_time,
@@ -50,6 +51,8 @@ pub fn search(
 
         best_move_overall = mov;
         best_score_overall = score;
+        let pv_line = pv.clone();
+        
         let nps = if time_elapsed > 0 {
             (nodes_searched as f64 / (time_elapsed as f64 / 1000.0)) as u64
         } else {
@@ -67,6 +70,15 @@ pub fn search(
             format!("cp {}", score_white)
         };
 
+        // Build PV string
+        let mut pv_uci = String::new();
+        let mut temp_board = board.clone();
+        for m in &pv_line {
+            if !pv_uci.is_empty() { pv_uci.push(' '); }
+            pv_uci.push_str(&move_to_uci(&temp_board, *m));
+            temp_board.play_unchecked(*m);
+        }
+
         println!(
             "info depth {} score {} nodes {} nps {} time {} pv {}",
             current_depth,
@@ -74,7 +86,7 @@ pub fn search(
             nodes_searched,
             nps,
             time_elapsed,
-            best_move_overall.map(|m| move_to_uci(&board, m)).unwrap_or_default()
+            pv_uci
         );
 
         if score.abs() >= CHECKMATE_SCORE - 100 { break; }
@@ -85,6 +97,7 @@ pub fn search(
         score: best_score_overall,
         nodes: nodes_searched,
         depth: max_depth,
+        pv: Vec::new(),
     }
 }
 
@@ -95,8 +108,9 @@ fn get_best_move(
     max_time_ms: u64,
     is_stopped: &AtomicBool,
     nodes: &mut u64,
-) -> (Option<Move>, i32) {
+) -> (Option<Move>, i32, Vec<Move>) {
     let mut best_move = None;
+    let mut best_pv = Vec::new();
     let mut alpha = -CHECKMATE_SCORE * 2;
     let beta = CHECKMATE_SCORE * 2;
 
@@ -109,14 +123,17 @@ fn get_best_move(
         new_board.play_unchecked(mov);
 
         // Start ply at 1 because we just made a move
-        let score = -negamax(&new_board, depth - 1, 1, -beta, -alpha, start_time, max_time_ms, is_stopped, nodes);
+        let (score, mut child_pv) = negamax(&new_board, depth - 1, 1, -beta, -alpha, start_time, max_time_ms, is_stopped, nodes);
+        let score = -score;
 
         if score > alpha {
             alpha = score;
             best_move = Some(mov);
+            child_pv.insert(0, mov);
+            best_pv = child_pv;
         }
     }
-    (best_move, alpha)
+    (best_move, alpha, best_pv)
 }
 
 fn negamax(
@@ -129,21 +146,22 @@ fn negamax(
     max_time_ms: u64,
     is_stopped: &AtomicBool,
     nodes: &mut u64,
-) -> i32 {
+) -> (i32, Vec<Move>) {
     if *nodes % 1024 == 0 && (is_stopped.load(Ordering::Relaxed) || start_time.elapsed().as_millis() as u64 >= max_time_ms) {
         is_stopped.store(true, Ordering::Relaxed);
-        return 0; 
+        return (0, Vec::new()); 
     }
 
     match board.status() {
         // FIXED: Return score relative to how many moves it took to get here
-        GameStatus::Won => return -CHECKMATE_SCORE + ply, 
-        GameStatus::Drawn => return 0,
+        GameStatus::Won => return (-CHECKMATE_SCORE + ply, Vec::new()), 
+        GameStatus::Drawn => return (0, Vec::new()),
         _ => {}
     }
 
     if depth == 0 {
-        return quiescence(board, alpha, beta, ply, nodes);
+        let (score, pv) = quiescence(board, alpha, beta, ply, nodes);
+        return (score, pv);
     }
 
     let mut moves = Vec::new();
@@ -151,35 +169,42 @@ fn negamax(
     moves.sort_by_cached_key(|m| -move_order_score(board, m));
 
     let mut best_score = -CHECKMATE_SCORE * 2;
+    let mut best_pv = Vec::new();
 
     for mov in moves {
         let mut new_board = board.clone();
         new_board.play_unchecked(mov);
 
-        let score = -negamax(&new_board, depth - 1, ply + 1, -beta, -alpha, start_time, max_time_ms, is_stopped, nodes);
+        let (score, mut child_pv) = negamax(&new_board, depth - 1, ply + 1, -beta, -alpha, start_time, max_time_ms, is_stopped, nodes);
+        let score = -score;
 
-        if score >= beta { return beta; }
+        if score >= beta { 
+            child_pv.insert(0, mov);
+            return (beta, child_pv); 
+        }
         if score > best_score {
             best_score = score;
+            child_pv.insert(0, mov);
+            best_pv = child_pv;
             if score > alpha { alpha = score; }
         }
     }
-    best_score
+    (best_score, best_pv)
 }
 
-fn quiescence(board: &Board, mut alpha: i32, beta: i32, ply: i32, nodes: &mut u64) -> i32 {
+fn quiescence(board: &Board, mut alpha: i32, beta: i32, ply: i32, nodes: &mut u64) -> (i32, Vec<Move>) {
     *nodes += 1;
     
     // Check if position is terminal
     match board.status() {
-        GameStatus::Won => return -CHECKMATE_SCORE + ply,
-        GameStatus::Drawn => return 0,
+        GameStatus::Won => return (-CHECKMATE_SCORE + ply, Vec::new()),
+        GameStatus::Drawn => return (0, Vec::new()),
         _ => {}
     }
     
     let stand_pat = eval::evaluate(board, 0);
     
-    if stand_pat >= beta { return beta; }
+    if stand_pat >= beta { return (beta, Vec::new()); }
     if stand_pat > alpha { alpha = stand_pat; }
 
     let mut captures = Vec::new();
@@ -191,14 +216,24 @@ fn quiescence(board: &Board, mut alpha: i32, beta: i32, ply: i32, nodes: &mut u6
     });
     captures.sort_by_cached_key(|m| -move_order_score(board, m));
 
+    let mut best_pv = Vec::new();
     for mov in captures {
         let mut new_board = board.clone();
         new_board.play_unchecked(mov);
-        let score = -quiescence(&new_board, -beta, -alpha, ply + 1, nodes);
-        if score >= beta { return beta; }
-        if score > alpha { alpha = score; }
+        let (score, mut child_pv) = quiescence(&new_board, -beta, -alpha, ply + 1, nodes);
+        let score = -score;
+        
+        if score >= beta { 
+            child_pv.insert(0, mov);
+            return (beta, child_pv); 
+        }
+        if score > alpha {
+            child_pv.insert(0, mov);
+            best_pv = child_pv;
+            alpha = score;
+        }
     }
-    alpha
+    (alpha, best_pv)
 }
 
 fn move_order_score(board: &Board, mov: &Move) -> i32 {
