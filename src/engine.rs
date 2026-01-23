@@ -109,6 +109,11 @@ impl Engine {
             time.map(|t| t / 20 + inc / 2).unwrap_or(1_000)
         };
 
+        // If time is given without explicit depth, search as deep as possible within time
+        if !depth_specified && (wtime.is_some() || btime.is_some()) {
+            depth = 250;
+        }
+
         let result = search::search(
             &self.board,
             depth,
