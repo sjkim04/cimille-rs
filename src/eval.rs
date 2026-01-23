@@ -82,120 +82,59 @@ pub fn piece_value(piece: Piece) -> i32 {
 }
 
 pub fn pst_value(piece: Piece, square: Square, color: Color) -> i32 {
-    let x = square.file() as usize;
-    let rank_val = square.rank() as usize;
-    
-    // In your TS version:
-    // White uses: table[y][x]
-    // Black uses: table[7 - y][x]
-    
-    // Mapping cozy-chess rank (0-7, bottom-to-top) to your Y (0-7, top-to-bottom):
-    let y = 7 - rank_val;
+    let file = square.file() as usize;
+    let rank = square.rank() as usize;
 
-    let table_y = if color == Color::White {
-        y
-    } else {
-        7 - y
-    };
+    // Flip rank for White because tables are Rank 8 -> Rank 1
+    // Keep rank as-is for Black because the table is mirrored
+    let r = if color == Color::White { 7 - rank } else { rank };
 
-    // Multiply by 10 to account for the decimal points in your TS PST
-    let val = match piece {
-        Piece::Pawn => pst::PAWN[table_y][x],
-        Piece::Knight => pst::KNIGHT[table_y][x],
-        Piece::Bishop => pst::BISHOP[table_y][x],
-        Piece::Rook => pst::ROOK[table_y][x],
-        Piece::Queen => pst::QUEEN[table_y][x],
-        Piece::King => pst::KING[table_y][x],
-    };
-    
-    // If your TS values were 0.5, 2, etc., and you stored them as 5, 20 in Rust:
-    val 
+    match piece {
+        Piece::Pawn => pst::PAWN[r][file],
+        Piece::Knight => pst::KNIGHT[r][file],
+        Piece::Bishop => pst::BISHOP[r][file],
+        Piece::Rook => pst::ROOK[r][file],
+        Piece::Queen => pst::QUEEN[r][file],
+        Piece::King => pst::KING[r][file],
+    }
 }
 
+pub fn evaluate(board: &Board, _depth: u32) -> i32 {
+    // Note: Terminal states (Mate/Draw) are handled in negamax, not here.
+    
+    let mut white_score = 0;
+    let mut black_score = 0;
 
-pub fn evaluate(board: &Board, depth: u32) -> i32 {
-    // Handle terminal positions first
-    match board.status() {
-        GameStatus::Won => return -(CHECKMATE_SCORE - depth as i32),
-        GameStatus::Drawn => return 0,
-        GameStatus::Ongoing => {}
-    }
-    
-    let mut score = 0;
-    
-    // Material + PST scoring FROM WHITE'S PERSPECTIVE (absolute, not side-relative)
-    for piece in Piece::ALL {
-        for square in board.pieces(piece) & board.colors(Color::White) {
-            score += piece_value(piece) + pst_value(piece, square, Color::White);
+    // Material + PST (Absolute)
+    for color in [Color::White, Color::Black] {
+        let mut score = 0;
+        for piece in Piece::ALL {
+            let pieces = board.pieces(piece) & board.colors(color);
+            for square in pieces {
+                score += piece_value(piece);
+                score += pst_value(piece, square, color);
+            }
         }
-        for square in board.pieces(piece) & board.colors(Color::Black) {
-            score -= piece_value(piece) + pst_value(piece, square, Color::Black);
-        }
+        if color == Color::White { white_score = score; } else { black_score = score; }
     }
-    
-    // Game rule score - penalize whoever is in check (from side-to-move perspective)
-    if !board.checkers().is_empty() {
-        if board.side_to_move() == Color::White {
-            score -= 30;
-        } else {
-            score += 30;  // Positive for White if Black is in check
-        }
-    }
-    
-    // Mobility bonus - always from White's perspective
-    score += get_mobility_delta(board);
-    
-    if board.side_to_move() == Color::Black { -score } else { score }
-}
 
-pub fn get_mobility_delta(board: &Board) -> i32 {
-    // Count legal moves for current side
-    let mut current_moves = 0;
+    // Mobility (Simplified, no FEN/String manipulation)
+    let mut mobility = 0;
     board.generate_moves(|moves| {
-        current_moves += moves.len() as i32;
+        mobility += moves.len() as i32;
         false
     });
+
+    // Penalize/Reward check
+    let check_bonus = if !board.checkers().is_empty() { -30 } else { 0 };
+
+    // Final Absolute Score
+    let total_white = white_score;
+    let total_black = black_score;
+    let absolute_score = total_white - total_black;
+
+    // Flip for Negamax: if side-to-move is Black, we want a positive score if Black is winning.
+    let perspective = if board.side_to_move() == Color::White { 1 } else { -1 };
     
-    // Try to flip active color using null move
-    // If in check, null_move() returns None, fall back to FEN manipulation
-    let opponent_moves = if let Some(flipped) = board.null_move() {
-        let mut count = 0;
-        flipped.generate_moves(|moves| {
-            count += moves.len() as i32;
-            false
-        });
-        count
-    } else {
-        // In check - use FEN manipulation to flip color like the original
-        let fen = format!("{}", board);
-        let parts: Vec<&str> = fen.split_whitespace().collect();
-        let new_color = if parts[1] == "w" { "b" } else { "w" };
-        let new_fen = format!("{} {} {} - {} {}", parts[0], new_color, parts[2], parts[4], parts[5]);
-        
-        if let Ok(flipped) = new_fen.parse::<Board>() {
-            let mut count = 0;
-            flipped.generate_moves(|moves| {
-                count += moves.len() as i32;
-                false
-            });
-            count
-        } else {
-            0
-        }
-    };
-    
-    // Calculate mobility from White's perspective
-    let white_moves = if board.side_to_move() == Color::White {
-        current_moves
-    } else {
-        opponent_moves
-    };
-    
-    let black_moves = if board.side_to_move() == Color::Black {
-        current_moves
-    } else {
-        opponent_moves
-    };
-    
-    (white_moves - black_moves) / 10
+    (absolute_score * perspective) + (mobility / 10) + check_bonus
 }

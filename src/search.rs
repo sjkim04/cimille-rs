@@ -27,6 +27,7 @@ pub fn search(
             break;
         }
 
+        // ply 0 is the root
         let (mov, score) = get_best_move(
             board,
             current_depth,
@@ -50,23 +51,28 @@ pub fn search(
             0
         };
 
-        // UCI expects score from White's perspective
+        // --- STABLE UCI SCORE REPORTING ---
         let score_white = if board.side_to_move() == Color::White { score } else { -score };
         
+        let score_string = if score.abs() > CHECKMATE_SCORE - 1000 {
+            let plies_to_mate = CHECKMATE_SCORE - score.abs();
+            let moves_to_mate = (plies_to_mate + 1) / 2;
+            format!("mate {}", if score_white > 0 { moves_to_mate as i32 } else { -(moves_to_mate as i32) })
+        } else {
+            format!("cp {}", score_white)
+        };
+
         println!(
-            "info depth {} score cp {} nodes {} nps {} time {} pv {}",
+            "info depth {} score {} nodes {} nps {} time {} pv {}",
             current_depth,
-            score_white,
+            score_string,
             nodes_searched,
             nps,
             time_elapsed,
             best_move_overall.map(|m| move_to_uci(&board, m)).unwrap_or_default()
         );
 
-        // Break if mate found
-        if score.abs() >= CHECKMATE_SCORE - (current_depth as i32 + 1) {
-            break;
-        }
+        if score.abs() >= CHECKMATE_SCORE - 100 { break; }
     }
 
     SearchResult {
@@ -85,38 +91,40 @@ fn get_best_move(
     is_stopped: &AtomicBool,
     nodes: &mut u64,
 ) -> (Option<Move>, i32) {
+    // Check if the position is already terminal (checkmate/stalemate)
+    match board.status() {
+        cozy_chess::GameStatus::Won => return (None, -CHECKMATE_SCORE),
+        cozy_chess::GameStatus::Drawn => return (None, 0),
+        _ => {}
+    }
+
     let mut best_move = None;
     let mut alpha = -CHECKMATE_SCORE * 2;
     let beta = CHECKMATE_SCORE * 2;
 
     let mut moves = Vec::new();
-    board.generate_moves(|m| {
-        moves.extend(m);
-        false
-    });
-
-    // Move ordering
+    board.generate_moves(|m| { moves.extend(m); false });
     moves.sort_by_cached_key(|m| -move_order_score(board, m));
 
     for mov in moves {
         let mut new_board = board.clone();
         new_board.play_unchecked(mov);
 
-        // Negamax call: Note the negative sign and swapped/negated alpha/beta
-        let score = -negamax(&new_board, depth - 1, -beta, -alpha, start_time, max_time_ms, is_stopped, nodes);
+        // Start ply at 1 because we just made a move
+        let score = -negamax(&new_board, depth - 1, 1, -beta, -alpha, start_time, max_time_ms, is_stopped, nodes);
 
         if score > alpha {
             alpha = score;
             best_move = Some(mov);
         }
     }
-
     (best_move, alpha)
 }
 
 fn negamax(
     board: &Board,
     depth: u32,
+    ply: i32,
     mut alpha: i32,
     beta: i32,
     start_time: &Instant,
@@ -125,25 +133,23 @@ fn negamax(
     nodes: &mut u64,
 ) -> i32 {
     if *nodes % 1024 == 0 && (is_stopped.load(Ordering::Relaxed) || start_time.elapsed().as_millis() as u64 >= max_time_ms) {
-        return 0; // The actual value won't matter as the search will discard this result
+        return 0; 
     }
 
     match board.status() {
-        GameStatus::Won => return -CHECKMATE_SCORE + (depth as i32), // Loss for the side-to-move
+        // FIXED: Return score relative to how many moves it took to get here
+        GameStatus::Won => return -CHECKMATE_SCORE + ply, 
         GameStatus::Drawn => return 0,
         _ => {}
     }
 
     if depth == 0 {
-        *nodes += 1;
-        return eval::evaluate(board, depth);
+        return quiescence(board, alpha, beta, nodes);
     }
 
     let mut moves = Vec::new();
-    board.generate_moves(|m| {
-        moves.extend(m);
-        false
-    });
+    board.generate_moves(|m| { moves.extend(m); false });
+    moves.sort_by_cached_key(|m| -move_order_score(board, m));
 
     let mut best_score = -CHECKMATE_SCORE * 2;
 
@@ -151,29 +157,48 @@ fn negamax(
         let mut new_board = board.clone();
         new_board.play_unchecked(mov);
 
-        let score = -negamax(&new_board, depth - 1, -beta, -alpha, start_time, max_time_ms, is_stopped, nodes);
+        let score = -negamax(&new_board, depth - 1, ply + 1, -beta, -alpha, start_time, max_time_ms, is_stopped, nodes);
 
-        if score >= beta {
-            return beta; // Pruning
-        }
+        if score >= beta { return beta; }
         if score > best_score {
             best_score = score;
-            if score > alpha {
-                alpha = score;
-            }
+            if score > alpha { alpha = score; }
         }
     }
     best_score
 }
 
-// Minimal fast move ordering (Avoids board cloning)
+fn quiescence(board: &Board, mut alpha: i32, beta: i32, nodes: &mut u64) -> i32 {
+    *nodes += 1;
+    let stand_pat = eval::evaluate(board, 0); // Ensure this is side-to-move relative!
+    
+    if stand_pat >= beta { return beta; }
+    if stand_pat > alpha { alpha = stand_pat; }
+
+    let mut captures = Vec::new();
+    board.generate_moves(|moves| {
+        for mov in moves {
+            if board.piece_on(mov.to).is_some() { captures.push(mov); }
+        }
+        false
+    });
+    captures.sort_by_cached_key(|m| -move_order_score(board, m));
+
+    for mov in captures {
+        let mut new_board = board.clone();
+        new_board.play_unchecked(mov);
+        let score = -quiescence(&new_board, -beta, -alpha, nodes);
+        if score >= beta { return beta; }
+        if score > alpha { alpha = score; }
+    }
+    alpha
+}
+
 fn move_order_score(board: &Board, mov: &Move) -> i32 {
     let mut score = 0;
     if let Some(captured) = board.piece_on(mov.to) {
         score += 10 * eval::piece_value(captured) - eval::piece_value(board.piece_on(mov.from).unwrap());
     }
-    if mov.promotion.is_some() {
-        score += 800;
-    }
+    if mov.promotion.is_some() { score += 800; }
     score
 }
