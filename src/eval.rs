@@ -82,21 +82,36 @@ pub fn piece_value(piece: Piece) -> i32 {
 }
 
 pub fn pst_value(piece: Piece, square: Square, color: Color) -> i32 {
-    let file = square.file() as usize;
-    let rank = square.rank() as usize;
+    let x = square.file() as usize;
+    let rank_val = square.rank() as usize;
     
-    // Mirror rank for black pieces (flip vertically)
-    let rank = if color == Color::Black { 7 - rank } else { rank };
+    // In your TS version:
+    // White uses: table[y][x]
+    // Black uses: table[7 - y][x]
     
-    match piece {
-        Piece::Pawn => pst::PAWN[rank][file],
-        Piece::Knight => pst::KNIGHT[rank][file],
-        Piece::Bishop => pst::BISHOP[rank][file],
-        Piece::Rook => pst::ROOK[rank][file],
-        Piece::Queen => pst::QUEEN[rank][file],
-        Piece::King => pst::KING[rank][file],
-    }
+    // Mapping cozy-chess rank (0-7, bottom-to-top) to your Y (0-7, top-to-bottom):
+    let y = 7 - rank_val;
+
+    let table_y = if color == Color::White {
+        y
+    } else {
+        7 - y
+    };
+
+    // Multiply by 10 to account for the decimal points in your TS PST
+    let val = match piece {
+        Piece::Pawn => pst::PAWN[table_y][x],
+        Piece::Knight => pst::KNIGHT[table_y][x],
+        Piece::Bishop => pst::BISHOP[table_y][x],
+        Piece::Rook => pst::ROOK[table_y][x],
+        Piece::Queen => pst::QUEEN[table_y][x],
+        Piece::King => pst::KING[table_y][x],
+    };
+    
+    // If your TS values were 0.5, 2, etc., and you stored them as 5, 20 in Rust:
+    val 
 }
+
 
 pub fn evaluate(board: &Board, depth: u32) -> i32 {
     // Handle terminal positions first
@@ -130,7 +145,7 @@ pub fn evaluate(board: &Board, depth: u32) -> i32 {
     // Mobility bonus - always from White's perspective
     score += get_mobility_delta(board);
     
-    score
+    if board.side_to_move() == Color::Black { -score } else { score }
 }
 
 pub fn get_mobility_delta(board: &Board) -> i32 {
