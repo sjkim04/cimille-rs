@@ -1,0 +1,11 @@
+[package]
+name = "cimille-rs"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "cimille_rs"
+path = "src/lib.rs"
+
+[dependencies]
+cozy-chess = { version = "0.3", features = ["pext"] }
