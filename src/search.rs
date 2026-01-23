@@ -37,14 +37,15 @@ pub fn search(
             &mut nodes_searched,
         );
 
-        if is_stopped.load(Ordering::Relaxed) {
+        let time_elapsed = start_time.elapsed().as_millis() as u64;
+
+        // If we ran out of time during this depth, discard the partial result
+        if is_stopped.load(Ordering::Relaxed) || time_elapsed >= max_time_ms {
             break;
         }
 
         best_move_overall = mov;
         best_score_overall = score;
-
-        let time_elapsed = start_time.elapsed().as_millis() as u64;
         let nps = if time_elapsed > 0 {
             (nodes_searched as f64 / (time_elapsed as f64 / 1000.0)) as u64
         } else {
@@ -91,13 +92,6 @@ fn get_best_move(
     is_stopped: &AtomicBool,
     nodes: &mut u64,
 ) -> (Option<Move>, i32) {
-    // Check if the position is already terminal (checkmate/stalemate)
-    match board.status() {
-        cozy_chess::GameStatus::Won => return (None, -CHECKMATE_SCORE),
-        cozy_chess::GameStatus::Drawn => return (None, 0),
-        _ => {}
-    }
-
     let mut best_move = None;
     let mut alpha = -CHECKMATE_SCORE * 2;
     let beta = CHECKMATE_SCORE * 2;
@@ -133,6 +127,7 @@ fn negamax(
     nodes: &mut u64,
 ) -> i32 {
     if *nodes % 1024 == 0 && (is_stopped.load(Ordering::Relaxed) || start_time.elapsed().as_millis() as u64 >= max_time_ms) {
+        is_stopped.store(true, Ordering::Relaxed);
         return 0; 
     }
 
@@ -144,7 +139,7 @@ fn negamax(
     }
 
     if depth == 0 {
-        return quiescence(board, alpha, beta, nodes);
+        return quiescence(board, alpha, beta, ply, nodes);
     }
 
     let mut moves = Vec::new();
@@ -168,9 +163,17 @@ fn negamax(
     best_score
 }
 
-fn quiescence(board: &Board, mut alpha: i32, beta: i32, nodes: &mut u64) -> i32 {
+fn quiescence(board: &Board, mut alpha: i32, beta: i32, ply: i32, nodes: &mut u64) -> i32 {
     *nodes += 1;
-    let stand_pat = eval::evaluate(board, 0); // Ensure this is side-to-move relative!
+    
+    // Check if position is terminal
+    match board.status() {
+        GameStatus::Won => return -CHECKMATE_SCORE + ply,
+        GameStatus::Drawn => return 0,
+        _ => {}
+    }
+    
+    let stand_pat = eval::evaluate(board, 0);
     
     if stand_pat >= beta { return beta; }
     if stand_pat > alpha { alpha = stand_pat; }
@@ -187,7 +190,7 @@ fn quiescence(board: &Board, mut alpha: i32, beta: i32, nodes: &mut u64) -> i32 
     for mov in captures {
         let mut new_board = board.clone();
         new_board.play_unchecked(mov);
-        let score = -quiescence(&new_board, -beta, -alpha, nodes);
+        let score = -quiescence(&new_board, -beta, -alpha, ply + 1, nodes);
         if score >= beta { return beta; }
         if score > alpha { alpha = score; }
     }
