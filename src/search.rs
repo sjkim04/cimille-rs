@@ -39,8 +39,12 @@ pub fn search(
 
         let time_elapsed = start_time.elapsed().as_millis() as u64;
 
-        // If we ran out of time during this depth, discard the partial result
+        // If we ran out of time or got stopped during this depth, keep a fallback move
         if is_stopped.load(Ordering::Relaxed) || time_elapsed >= max_time_ms {
+            if best_move_overall.is_none() {
+                best_move_overall = mov;
+                best_score_overall = score;
+            }
             break;
         }
 
