@@ -1,7 +1,7 @@
-use cozy_chess::{Board, Color};
 use cozy_chess::util::parse_uci_move;
-use std::sync::atomic::{AtomicBool, Ordering};
+use cozy_chess::{Board, Color};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 
 use crate::search;
@@ -11,6 +11,7 @@ pub struct Engine {
     board: Board,
     stop_flag: Arc<AtomicBool>,
     search_thread: Option<JoinHandle<()>>,
+    position_history: Vec<u64>,
 }
 
 impl Engine {
@@ -19,12 +20,13 @@ impl Engine {
             board: Board::default(),
             stop_flag: Arc::new(AtomicBool::new(false)),
             search_thread: None,
+            position_history: Vec::new(),
         }
     }
 
     pub fn handle_command(&mut self, line: &str) {
         let tokens: Vec<&str> = line.split_whitespace().collect();
-        match tokens.get(0).copied() {
+        match tokens.first().copied() {
             Some("uci") => self.uci(),
             Some("isready") => println!("readyok"),
             Some("position") => self.position(&tokens),
@@ -54,23 +56,35 @@ impl Engine {
         match tokens[1] {
             "startpos" => {
                 self.board = Board::default();
+                self.position_history.clear();
+                self.position_history.push(self.board.hash());
+
                 if let Some(moves_index) = tokens.iter().position(|&t| t == "moves") {
                     for mv_str in &tokens[moves_index + 1..] {
                         if let Ok(mv) = parse_uci_move(&self.board, mv_str) {
                             self.board.play_unchecked(mv);
+                            self.position_history.push(self.board.hash());
                         }
                     }
                 }
             }
             "fen" => {
-                let fen_parts: Vec<&str> = tokens[2..].iter().take_while(|&&t| t != "moves").cloned().collect();
+                let fen_parts: Vec<&str> = tokens[2..]
+                    .iter()
+                    .take_while(|&&t| t != "moves")
+                    .cloned()
+                    .collect();
                 let fen = fen_parts.join(" ");
                 if let Ok(board) = fen.parse() {
                     self.board = board;
+                    self.position_history.clear();
+                    self.position_history.push(self.board.hash());
+
                     if let Some(moves_index) = tokens.iter().position(|&t| t == "moves") {
                         for mv_str in &tokens[moves_index + 1..] {
                             if let Ok(mv) = parse_uci_move(&self.board, mv_str) {
                                 self.board.play_unchecked(mv);
+                                self.position_history.push(self.board.hash());
                             }
                         }
                     }
@@ -101,14 +115,38 @@ impl Engine {
         let mut i = 1;
         while i < tokens.len() {
             match tokens[i] {
-                "wtime" if i + 1 < tokens.len() => { wtime = tokens[i+1].parse().ok(); i += 2; }
-                "btime" if i + 1 < tokens.len() => { btime = tokens[i+1].parse().ok(); i += 2; }
-                "winc"  if i + 1 < tokens.len() => { winc  = tokens[i+1].parse().unwrap_or(0); i += 2; }
-                "binc"  if i + 1 < tokens.len() => { binc  = tokens[i+1].parse().unwrap_or(0); i += 2; }
-                "movetime" if i + 1 < tokens.len() => { movetime = tokens[i+1].parse().ok(); i += 2; }
-                "depth" if i + 1 < tokens.len() => { depth = tokens[i+1].parse().unwrap_or(depth); depth_specified = true; i += 2; }
-                "infinite" => { infinite = true; i += 1; }
-                _ => { i += 1; }
+                "wtime" if i + 1 < tokens.len() => {
+                    wtime = tokens[i + 1].parse().ok();
+                    i += 2;
+                }
+                "btime" if i + 1 < tokens.len() => {
+                    btime = tokens[i + 1].parse().ok();
+                    i += 2;
+                }
+                "winc" if i + 1 < tokens.len() => {
+                    winc = tokens[i + 1].parse().unwrap_or(0);
+                    i += 2;
+                }
+                "binc" if i + 1 < tokens.len() => {
+                    binc = tokens[i + 1].parse().unwrap_or(0);
+                    i += 2;
+                }
+                "movetime" if i + 1 < tokens.len() => {
+                    movetime = tokens[i + 1].parse().ok();
+                    i += 2;
+                }
+                "depth" if i + 1 < tokens.len() => {
+                    depth = tokens[i + 1].parse().unwrap_or(depth);
+                    depth_specified = true;
+                    i += 2;
+                }
+                "infinite" => {
+                    infinite = true;
+                    i += 1;
+                }
+                _ => {
+                    i += 1;
+                }
             }
         }
 
@@ -139,13 +177,11 @@ impl Engine {
         // Run search in background so stop can be honored immediately
         let board_clone = self.board.clone();
         let stop_flag = self.stop_flag.clone();
+        let game_history = self.position_history.clone();
+
         self.search_thread = Some(thread::spawn(move || {
-            let result = search::search(
-                &board_clone,
-                depth,
-                time_budget,
-                &stop_flag,
-            );
+            let result =
+                search::search(&board_clone, depth, time_budget, &stop_flag, &game_history);
 
             if let Some(best) = result.best_move {
                 println!("bestmove {}", uci::move_to_uci(&board_clone, best));
@@ -158,5 +194,12 @@ impl Engine {
     fn ucinewgame(&mut self) {
         self.board = Board::default();
         self.stop_flag.store(false, Ordering::Relaxed);
+        self.position_history.clear();
+    }
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Self::new()
     }
 }
