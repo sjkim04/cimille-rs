@@ -286,7 +286,7 @@ fn quiescence(
         _ => {}
     }
 
-    let stand_pat = eval::evaluate(board, 0);
+    let stand_pat = eval::evaluate(board);
 
     if stand_pat >= beta {
         return (beta, Vec::new());

@@ -99,42 +99,35 @@ pub fn pst_value(piece: Piece, square: Square, color: Color) -> i32 {
     }
 }
 
-pub fn evaluate(board: &Board, _depth: u32) -> i32 {
-    // Note: Terminal states (Mate/Draw) are handled in negamax, not here.
-    
-    let mut white_score = 0;
-    let mut black_score = 0;
-
-    // Material + PST (Absolute)
-    for color in [Color::White, Color::Black] {
-        let mut score = 0;
-        for piece in Piece::ALL {
-            let pieces = board.pieces(piece) & board.colors(color);
-            for square in pieces {
-                score += piece_value(piece);
-                score += pst_value(piece, square, color);
-            }
+fn side_material_and_pst(board: &Board, color: Color) -> i32 {
+    let mut score = 0;
+    for piece in Piece::ALL {
+        let pieces = board.pieces(piece) & board.colors(color);
+        for square in pieces {
+            score += piece_value(piece);
+            score += pst_value(piece, square, color);
         }
-        if color == Color::White { white_score = score; } else { black_score = score; }
     }
+    score
+}
 
-    // Mobility (Simplified, no FEN/String manipulation)
+pub fn evaluate(board: &Board) -> i32 {
+    // Terminal states (mate/draw) are handled in negamax, not here.
+    // This returns score relative to the side to move.
+    let us = board.side_to_move();
+    let them = !us;
+
+    let material_and_pst = side_material_and_pst(board, us) - side_material_and_pst(board, them);
+
+    // Mobility from side-to-move perspective.
     let mut mobility = 0;
     board.generate_moves(|moves| {
         mobility += moves.len() as i32;
         false
     });
 
-    // Penalize/Reward check
-    let check_bonus = if !board.checkers().is_empty() { -30 } else { 0 };
+    // Being in check is bad for the side to move.
+    let check_penalty = if !board.checkers().is_empty() { -30 } else { 0 };
 
-    // Final Absolute Score
-    let total_white = white_score;
-    let total_black = black_score;
-    let absolute_score = total_white - total_black;
-
-    // Flip for Negamax: if side-to-move is Black, we want a positive score if Black is winning.
-    let perspective = if board.side_to_move() == Color::White { 1 } else { -1 };
-    
-    (absolute_score * perspective) + (mobility / 10) + check_bonus
+    material_and_pst + (mobility / 10) + check_penalty
 }
