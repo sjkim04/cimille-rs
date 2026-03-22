@@ -7,6 +7,8 @@ name = "cimille-rs"
 version = "0.1.0"
 dependencies = [
  "cozy-chess",
+ "once_cell",
+ "pyrrhic-rs",
 ]
 
 [[package]]
@@ -23,3 +25,34 @@ name = "cozy-chess-types"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "276b4804775347af35852c80665ad23d62a9ee742a14656e7da6a7b1cee74ee9"
+
+[[package]]
+name = "libc"
+version = "0.2.183"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
+
+[[package]]
+name = "memmap2"
+version = "0.9.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "714098028fe011992e1c3962653c96b2d578c4b4bce9036e15ff220319b1e0e3"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "once_cell"
+version = "1.21.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "pyrrhic-rs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3910f053bb86e0d75fb0e61b47d82e456a15c548fb4d8a8da9d9d1a34a4e299"
+dependencies = [
+ "libc",
+ "memmap2",
+]

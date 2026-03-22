@@ -9,3 +9,5 @@ path = "src/lib.rs"
 
 [dependencies]
 cozy-chess = { version = "0.3", features = ["pext"] }
+pyrrhic-rs = "0.2.0"
+once_cell = "1.18"

@@ -1,6 +1,9 @@
+use crate::syzygy;
+
 use crate::eval::{self, CHECKMATE_SCORE};
 use crate::uci::move_to_uci;
 use cozy_chess::{Board, GameStatus, Move};
+use pyrrhic_rs::WdlProbeResult;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -171,6 +174,16 @@ fn get_best_move(
     (best_move, alpha, best_pv)
 }
 
+fn wdl_to_score(wdl: WdlProbeResult) -> i32 {
+    match wdl {
+        WdlProbeResult::Win => CHECKMATE_SCORE - 1,
+        WdlProbeResult::CursedWin => 20,
+        WdlProbeResult::Draw => 0,
+        WdlProbeResult::BlessedLoss => -20,
+        WdlProbeResult::Loss => -CHECKMATE_SCORE + 1,
+    }
+}
+
 fn negamax(
     board: &Board,
     depth: u32,
@@ -203,6 +216,12 @@ fn negamax(
         GameStatus::Won => return (-CHECKMATE_SCORE + ply, Vec::new()),
         GameStatus::Drawn => return (0, Vec::new()),
         _ => {}
+    }
+
+    if board.occupied().len() <= 5 {
+        if let Ok(wdl) = syzygy::probe_wdl(board) {
+            return (wdl_to_score(wdl), Vec::new());
+        }
     }
 
     if depth == 0 {
@@ -284,6 +303,12 @@ fn quiescence(
         GameStatus::Won => return (-CHECKMATE_SCORE + ply, Vec::new()),
         GameStatus::Drawn => return (0, Vec::new()),
         _ => {}
+    }
+
+    if board.occupied().len() <= 5 {
+        if let Ok(wdl) = syzygy::probe_wdl(board) {
+            return (wdl_to_score(wdl), Vec::new());
+        }
     }
 
     let stand_pat = eval::evaluate(board);

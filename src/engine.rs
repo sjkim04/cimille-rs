@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 
 use crate::search;
+use crate::syzygy;
 use crate::uci;
 
 pub struct Engine {
@@ -29,6 +30,7 @@ impl Engine {
         match tokens.first().copied() {
             Some("uci") => self.uci(),
             Some("isready") => println!("readyok"),
+            Some("setoption") => self.setoption(&tokens),
             Some("position") => self.position(&tokens),
             Some("go") => self.go(&tokens),
             Some("stop") => {
@@ -46,7 +48,43 @@ impl Engine {
     fn uci(&self) {
         println!("id name Cimille 0.1.0");
         println!("id author Ssimille, Phrygia");
+        println!("option name SyzygyPath type string default <empty>");
         println!("uciok");
+    }
+
+    fn setoption(&mut self, tokens: &[&str]) {
+        let name_index = tokens.iter().position(|&t| t == "name");
+        let value_index = tokens.iter().position(|&t| t == "value");
+
+        let Some(name_index) = name_index else {
+            return;
+        };
+
+        let name_end = value_index.unwrap_or(tokens.len());
+        if name_index + 1 >= name_end {
+            return;
+        }
+
+        let name = tokens[name_index + 1..name_end].join(" ");
+        let value = if let Some(v_idx) = value_index {
+            if v_idx + 1 < tokens.len() {
+                tokens[v_idx + 1..].join(" ")
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        if name.eq_ignore_ascii_case("SyzygyPath") {
+            if let Err(err) = syzygy::set_path(&value) {
+                println!("info string failed to set SyzygyPath: {}", err);
+            } else if value.is_empty() || value == "<empty>" {
+                println!("info string Syzygy tablebase disabled");
+            } else {
+                println!("info string SyzygyPath set to {}", value);
+            }
+        }
     }
 
     fn position(&mut self, tokens: &[&str]) {

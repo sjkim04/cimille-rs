@@ -2,6 +2,7 @@ pub mod engine;
 pub mod eval;
 pub mod search;
 pub mod uci;
+pub mod syzygy;
 
 use engine::Engine;
 use std::io::{self, BufRead};
