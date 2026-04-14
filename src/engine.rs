@@ -1,5 +1,6 @@
 use cozy_chess::util::parse_uci_move;
 use cozy_chess::{Board, Color};
+use std::io::{self, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -29,7 +30,10 @@ impl Engine {
         let tokens: Vec<&str> = line.split_whitespace().collect();
         match tokens.first().copied() {
             Some("uci") => self.uci(),
-            Some("isready") => println!("readyok"),
+            Some("isready") => {
+                println!("readyok");
+                let _ = io::stdout().flush();
+            }
             Some("setoption") => self.setoption(&tokens),
             Some("position") => self.position(&tokens),
             Some("go") => self.go(&tokens),
@@ -40,7 +44,13 @@ impl Engine {
                 }
             }
             Some("ucinewgame") => self.ucinewgame(),
-            Some("quit") => std::process::exit(0),
+            Some("quit") => {
+                self.stop_flag.store(true, Ordering::Relaxed);
+                if let Some(handle) = self.search_thread.take() {
+                    let _ = handle.join();
+                }
+                std::process::exit(0)
+            }
             _ => {}
         }
     }
@@ -50,6 +60,7 @@ impl Engine {
         println!("id author Ssimille, Phrygia");
         println!("option name SyzygyPath type string default <empty>");
         println!("uciok");
+        let _ = io::stdout().flush();
     }
 
     fn setoption(&mut self, tokens: &[&str]) {
@@ -84,6 +95,7 @@ impl Engine {
             } else {
                 println!("info string SyzygyPath set to {}", value);
             }
+            let _ = io::stdout().flush();
         }
     }
 
@@ -226,6 +238,7 @@ impl Engine {
             } else {
                 println!("bestmove 0000");
             }
+            let _ = io::stdout().flush();
         }));
     }
 

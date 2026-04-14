@@ -1,6 +1,7 @@
 use cozy_chess::*;
 use once_cell::sync::Lazy;
-use pyrrhic_rs::{EngineAdapter, TableBases, WdlProbeResult};
+use pyrrhic_rs::{DtzProbeResult, EngineAdapter, TBError, TableBases, WdlProbeResult};
+use std::fmt;
 use std::sync::RwLock;
 
 #[derive(Clone)]
@@ -40,51 +41,104 @@ impl EngineAdapter for CozyChessAdapter {
 static TABLEBASE: Lazy<RwLock<Option<TableBases<CozyChessAdapter>>>> =
     Lazy::new(|| RwLock::new(None));
 
-pub fn set_path(path: &str) -> Result<(), String> {
-    let mut tb = TABLEBASE
-        .write()
-        .map_err(|_| String::from("tablebase lock poisoned"))?;
+#[derive(Debug)]
+pub enum SyzygyError {
+    LockPoisoned,
+    NotConfigured,
+    Tablebase(TBError),
+}
+
+impl fmt::Display for SyzygyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SyzygyError::LockPoisoned => write!(f, "tablebase lock poisoned"),
+            SyzygyError::NotConfigured => write!(f, "tablebase path is not configured"),
+            SyzygyError::Tablebase(err) => write!(f, "tablebase error: {:?}", err),
+        }
+    }
+}
+
+impl std::error::Error for SyzygyError {}
+
+struct BoardBits {
+    white: u64,
+    black: u64,
+    kings: u64,
+    queens: u64,
+    rooks: u64,
+    bishops: u64,
+    knights: u64,
+    pawns: u64,
+    ep: u32,
+    turn: bool,
+}
+
+fn extract_board(board: &Board) -> BoardBits {
+    BoardBits {
+        white: board.colors(Color::White).0,
+        black: board.colors(Color::Black).0,
+        kings: board.pieces(Piece::King).0,
+        queens: board.pieces(Piece::Queen).0,
+        rooks: board.pieces(Piece::Rook).0,
+        bishops: board.pieces(Piece::Bishop).0,
+        knights: board.pieces(Piece::Knight).0,
+        pawns: board.pieces(Piece::Pawn).0,
+        ep: board.en_passant().map(|square| (square as u32) + 1).unwrap_or(0),
+        turn: board.side_to_move() == Color::White,
+    }
+}
+
+pub fn set_path(path: &str) -> Result<(), SyzygyError> {
+    let mut tb = TABLEBASE.write().map_err(|_| SyzygyError::LockPoisoned)?;
 
     if path.is_empty() || path == "<empty>" {
         *tb = None;
         return Ok(());
     }
 
-    let loaded = TableBases::new(path).map_err(|err| format!("{:?}", err))?;
+    let loaded = TableBases::new(path).map_err(SyzygyError::Tablebase)?;
     *tb = Some(loaded);
     Ok(())
 }
 
-pub fn probe_wdl(board: &Board) -> Result<WdlProbeResult, ()> {
-    let tb_guard = TABLEBASE.read().map_err(|_| ())?;
-    let tb = tb_guard.as_ref().ok_or(())?;
+pub fn probe_wdl(board: &Board) -> Result<WdlProbeResult, SyzygyError> {
+    let tb_guard = TABLEBASE.read().map_err(|_| SyzygyError::LockPoisoned)?;
+    let tb = tb_guard.as_ref().ok_or(SyzygyError::NotConfigured)?;
+    let bits = extract_board(board);
 
-    let white_pieces = board.colors(Color::White);
-    let black_pieces = board.colors(Color::Black);
-    
-    let kings = board.pieces(Piece::King);
-    let queens = board.pieces(Piece::Queen);
-    let rooks = board.pieces(Piece::Rook);
-    let bishops = board.pieces(Piece::Bishop);
-    let knights = board.pieces(Piece::Knight);
-    let pawns = board.pieces(Piece::Pawn);
-    
-    let ep = board.en_passant()
-        .map(|square| (square as u32) + 1)
-        .unwrap_or(0);
-    
-    let turn = board.side_to_move() == Color::White;
-    
     tb.probe_wdl(
-        white_pieces.0,
-        black_pieces.0,
-        kings.0,
-        queens.0,
-        rooks.0,
-        bishops.0,
-        knights.0,
-        pawns.0,
-        ep,
-        turn,
-    ).map_err(|_| ())
+        bits.white,
+        bits.black,
+        bits.kings,
+        bits.queens,
+        bits.rooks,
+        bits.bishops,
+        bits.knights,
+        bits.pawns,
+        bits.ep,
+        bits.turn,
+    )
+    .map_err(SyzygyError::Tablebase)
+}
+
+pub fn probe_root(board: &Board) -> Result<DtzProbeResult, SyzygyError> {
+    let tb_guard = TABLEBASE.read().map_err(|_| SyzygyError::LockPoisoned)?;
+    let tb = tb_guard.as_ref().ok_or(SyzygyError::NotConfigured)?;
+    let bits = extract_board(board);
+    let rule50 = board.halfmove_clock() as u32;
+
+    tb.probe_root(
+        bits.white,
+        bits.black,
+        bits.kings,
+        bits.queens,
+        bits.rooks,
+        bits.bishops,
+        bits.knights,
+        bits.pawns,
+        rule50,
+        bits.ep,
+        bits.turn,
+    )
+    .map_err(SyzygyError::Tablebase)
 }
